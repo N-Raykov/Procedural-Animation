@@ -6,7 +6,6 @@ using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
 
-namespace Wolfire {
 public class GibbonControl : MonoBehaviour {
     public GameObject display_gibbon; // Character mesh and bone transforms
         
@@ -190,6 +189,46 @@ public class GibbonControl : MonoBehaviour {
     float gallop_amount = 0.0f;
     float quad_gallop_body_compress_offset = 0.4f;
     float quad_gallop_body_compress_amount = 0.15f;
+
+    void OnEnable()
+    {
+        ImGuiUn.Layout += DebuggingGUI;
+    }
+
+    private void OnDisable()
+    {
+        ImGuiUn.Layout -= DebuggingGUI;
+    }
+
+    void DebuggingGUI()
+    {
+        if (ImGui.Begin("Animation Tuning"))
+        {
+            ImGui.TextWrapped("This is an example of a temporary UI window that could be used to tune animation parameters without having to recompile");
+            ImGui.SliderFloat("gallop_offset", ref gallop_offset, -1f, 1f);
+            ImGui.SliderFloat("gallop_stride", ref gallop_stride, 0f, 0.85f);
+            ImGui.SliderFloat("gallop_height_offset", ref gallop_height_offset, 0f, 1f);
+            ImGui.SliderFloat("gallop_height", ref gallop_height, 0f, 1f);
+            ImGui.SliderFloat("gallop_height_base", ref gallop_height_base, 0f, 1f);
+            ImGui.SliderFloat("gallop_hip_rotate", ref gallop_hip_rotate, -4f, 4f);
+            ImGui.SliderFloat("gallop_lean", ref gallop_lean, -4f, 4f);
+            ImGui.SliderFloat("gallop_stride_height", ref gallop_stride_height, -1f, 1f);
+            ImGui.SliderFloat("gallop_arm_stride", ref gallop_arm_stride, 0f, 4f);
+            ImGui.SliderFloat("gallop_arm_stride_height", ref gallop_arm_stride_height, 0f, 1f);
+            ImGui.SliderFloat("quad_amount", ref quad_amount, 0f, 1f);
+            ImGui.SliderFloat("quad_gallop_body_compress_amount", ref quad_gallop_body_compress_amount, 0f, 1f);
+            ImGui.SliderFloat("quad_gallop_body_compress_offset", ref quad_gallop_body_compress_offset, 0f, 1f);
+            ImGui.SliderFloat("gallop_amount", ref gallop_amount, 0f, 1f);
+        }
+        ImGui.End();
+
+        debug_info.DrawWindow();
+
+        if (Input.GetKeyDown(KeyCode.Tab))
+        {
+            Time.timeScale = (Time.timeScale == 1.0f) ? 0.1f : 1.0f;
+        }
+    }
 
     void Start() {
         // Starting point
@@ -638,31 +677,6 @@ public class GibbonControl : MonoBehaviour {
             DebugDraw.Line(complete.points[10].pos,complete.points[12].pos, Color.white, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
         }
         display_gibbon.SetActive(debug_info.draw_gibbon);
-
-        if(ImGui.Begin("Animation Tuning")){
-            ImGui.TextWrapped("This is an example of a temporary UI window that could be used to tune animation parameters without having to recompile");
-            ImGui.SliderFloat("gallop_offset", ref gallop_offset, -1f, 1f);
-            ImGui.SliderFloat("gallop_stride", ref gallop_stride, 0f, 0.85f);
-            ImGui.SliderFloat("gallop_height_offset", ref gallop_height_offset, 0f, 1f);
-            ImGui.SliderFloat("gallop_height", ref gallop_height, 0f, 1f);
-            ImGui.SliderFloat("gallop_height_base", ref gallop_height_base, 0f, 1f);
-            ImGui.SliderFloat("gallop_hip_rotate", ref gallop_hip_rotate, -4f, 4f);
-            ImGui.SliderFloat("gallop_lean", ref gallop_lean, -4f, 4f);
-            ImGui.SliderFloat("gallop_stride_height", ref gallop_stride_height, -1f, 1f);
-            ImGui.SliderFloat("gallop_arm_stride", ref gallop_arm_stride, 0f, 4f);
-            ImGui.SliderFloat("gallop_arm_stride_height", ref gallop_arm_stride_height, 0f, 1f);
-            ImGui.SliderFloat("quad_amount", ref quad_amount, 0f, 1f);
-            ImGui.SliderFloat("quad_gallop_body_compress_amount", ref quad_gallop_body_compress_amount, 0f, 1f);
-            ImGui.SliderFloat("quad_gallop_body_compress_offset", ref quad_gallop_body_compress_offset, 0f, 1f);
-            ImGui.SliderFloat("gallop_amount", ref gallop_amount, 0f, 1f);
-        }
-        ImGui.End();
-
-        debug_info.DrawWindow();
-
-        if(Input.GetKeyDown(KeyCode.Tab)){
-            Time.timeScale = (Time.timeScale == 1.0f)?0.1f:1.0f;
-        }
     }
     
     float3 MoveTowards(float3 a, float3 b, float max_dist){
@@ -1265,5 +1279,4 @@ public class GibbonControl : MonoBehaviour {
     private void FixedUpdate() {
         Step(Time.fixedDeltaTime);
     }
-}
 }
