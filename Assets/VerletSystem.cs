@@ -6,9 +6,6 @@ using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
 
-namespace Wolfire {
-// This is a simple kind of physics engine based on particles and distance constraints:
-// velocity is implied by the delta between the current position and previous position
 public class Verlet {
     public class Point {
         public float3 bind_pos; // Initial position, good for skinning
@@ -128,5 +125,4 @@ public class Verlet {
             EndSim();
         }
     }
-}
 }
