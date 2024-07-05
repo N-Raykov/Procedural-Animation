@@ -6,6 +6,7 @@ using UnityEngine;
 using Unity.Mathematics;
 using Unity.Collections;
 
+namespace Wolfire {
 public class GibbonControl : MonoBehaviour {
     public GameObject display_gibbon; // Character mesh and bone transforms
         
@@ -424,7 +425,202 @@ public class GibbonControl : MonoBehaviour {
     
     // Prepare to draw next frame
     void Update() {
+        if(Input.GetKeyDown(KeyCode.Space)){
+            // Start jump
+            simple_vel[1] = 5.0f;
+            if(!in_air && on_branch == 0.0f){
+                simple_vel[1] += 2.0f;                
+            }
+            in_air = true;
+            
+            // Copy display rig pose from previous frame to jump rig
+            for(int i=0; i<jump.simple_rig.points.Count; ++i){
+                jump.simple_rig.points[i].pos = display.simple_rig.points[i].pos;
+                jump.simple_rig.points[i].old_pos = math.lerp(display.simple_rig.points[i].old_pos, display.simple_rig.points[i].pos, 0.75f); // Adjust for different timestep
+            }          
+            for(int i=0; i<2; ++i){
+                jump.simple_rig.bones[i].length[1] = display.simple_rig.bones[i].length[1];
+            }
 
+            // Initial trajectory info
+            jump_time = Time.time;
+            jump_point = (display.limb_targets[2]+display.limb_targets[3])*0.5f;
+            predicted_land_time = jump_time + 5.0f;
+
+            // Adjust COM
+            float total_mass = 0f;
+            var com = float3.zero;
+            for(int i=0; i<display.simple_rig.points.Count; ++i){
+                com += display.simple_rig.points[i].pos * display.simple_rig.points[i].mass;
+                total_mass += display.simple_rig.points[i].mass;
+            }
+            com /= total_mass;
+            jump_com_offset = com-simple_pos;
+        }
+        
+        { // Use "arms" rig to drive full body IK rig
+            var points = display.simple_rig.points;
+
+            // Calculate midpoint and orientation of body triangle
+            var bind_mid = (points[0].bind_pos + points[2].bind_pos + points[4].bind_pos) / 3.0f;
+            var mid      = (points[0].pos     +  points[2].pos      + points[4].pos)      / 3.0f;
+            var forward      = math.normalize(math.cross(points[0].pos      - points[2].pos,      points[0].pos      - points[4].pos));
+            var bind_forward = math.normalize(math.cross(points[0].bind_pos - points[2].bind_pos, points[0].bind_pos - points[4].bind_pos));
+            var up      = math.normalize((points[0].pos      + points[2].pos)      / 2.0f - points[4].pos);
+            var bind_up = math.normalize((points[0].bind_pos + points[2].bind_pos) / 2.0f - points[4].bind_pos);
+        
+            // Copy hand and shoulder positions from simple rig
+            for(int i=0; i<4; ++i){
+                complete.points[i].pos = points[i].pos;
+                complete.points[i].pinned = true;
+            }
+            
+            var body_rotation = math.mul(quaternion.LookRotation(forward, up), 
+                                          math.inverse(quaternion.LookRotation(bind_forward, bind_up)));
+
+            // Set up spine, head and leg positions based on body rotation
+            for(int i=5; i<14; ++i){
+                complete.points[i].pos = mid + math.mul(body_rotation, (complete.points[i].bind_pos - bind_mid));
+                complete.points[i].pinned = true;
+            }
+            
+            // Apply body compression
+            complete.points[7].pinned = false;
+            complete.points[8].pinned = false;
+            var old_hip = complete.points[9].pos;
+            for(int i=7; i<=9; ++i){
+                complete.points[i].pos = math.lerp(complete.points[i].pos, complete.points[6].pos, body_compress_amount);
+            }
+            complete.points[7].pos -= forward * body_compress_amount * 0.2f;
+            complete.points[8].pos -= forward * body_compress_amount * 0.2f;
+            
+            for(int i=10; i<14; ++i){
+                complete.points[i].pos += complete.points[9].pos - old_hip;
+            }
+
+            // Move feet to foot targets
+            for(int i=0; i<2; ++i){
+                complete.points[11+i*2].pos = display.limb_targets[2+i];
+            }
+            
+            // Enforce bone length constraints
+            for(int i=0; i<2; ++i){
+                complete.EnforceDistanceConstraints();
+            }
+        }
+        
+        { // Apply full body IK rig to visual deformation bones
+            var points = complete.points;
+
+            // Get torso orientation and position
+            var bind_mid = (points[0].bind_pos + points[2].bind_pos + points[9].bind_pos) / 3.0f;
+            var mid      = (points[0].pos      + points[2].pos      + points[9].pos)      / 3.0f;
+            var forward      = -math.normalize(math.cross(points[0].pos      - points[2].pos,      points[0].pos -      points[9].pos));
+            var bind_forward = -math.normalize(math.cross(points[0].bind_pos - points[2].bind_pos, points[0].bind_pos - points[9].bind_pos));
+            var up =      math.normalize((points[0].pos      + points[2].pos)/2.0f      - points[9].pos);
+            var bind_up = math.normalize((points[0].bind_pos + points[2].bind_pos)/2.0f - points[9].bind_pos);
+        
+            // Apply core bones
+            ApplyBound(display_body.head, forward, bind_forward, 5, 6);
+            ApplyBound(display_body.chest, forward, bind_forward, 6, 7);
+            ApplyBound(display_body.belly, forward, bind_forward, 7, 8);
+            ApplyBound(display_body.pelvis, forward, bind_forward, 8, 9);
+
+            // Arm IK
+            for(int i=0; i<2; ++i){
+                var top = display_body.arm_top_r;
+                var bottom = display_body.arm_bottom_r;
+                if(i==1){
+                    top = display_body.arm_top_l;
+                    bottom = display_body.arm_bottom_l;
+                }
+
+                int start_id = i*2;
+                int end_id = i*2+1;
+                var start = points[start_id];
+                var end = points[end_id];
+
+                // Adjust elbow target position
+                float ik_driver = math.max(on_branch, in_air_amount);
+                var ik_forward_amount = -ik_driver * 0.8f;
+                var ik_up_amount = 0.1f + ik_driver * 0.5f;
+                var elbow_point      = ((points[2].pos      + points[0].pos)      * 0.5f + up      * ik_up_amount + forward      * ik_forward_amount);
+                var bind_elbow_point = ((points[2].bind_pos + points[0].bind_pos) * 0.5f + bind_up * ik_up_amount + bind_forward * ik_forward_amount);
+                
+                if(debug_info.draw_elbow_ik_target){
+                    DebugDraw.Line((start.pos + end.pos) * 0.5f, elbow_point, Color.red, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                    DebugDraw.Sphere(elbow_point, Color.red, Vector3.one * 0.1f, Quaternion.identity, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                }
+                
+                var old_axis = math.normalize(math.cross((end.bind_pos + start.bind_pos) * 0.5f - bind_elbow_point, start.bind_pos - end.bind_pos));
+                var axis     = math.normalize(math.cross((end.pos      + start.pos)      * 0.5f - elbow_point,      start.pos      - end.pos));
+            
+                ApplyTwoBoneIK(start_id, end_id, forward, arm_ik, top, bottom, complete.points, old_axis, axis);
+                
+                if(debug_info.draw_ik_final){
+                    DebugDraw.Line(points[start_id].pos, bottom.transform.position, Color.white, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                    DebugDraw.Line(points[end_id].pos, bottom.transform.position, Color.white, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                }
+            }
+
+            // Leg IK
+            for(int i=0; i<2; ++i){
+                var top = display_body.leg_top_r;
+                var bottom = display_body.leg_bottom_r;
+                if(i==1){
+                    top = display_body.leg_top_l;
+                    bottom = display_body.leg_bottom_l;
+                }
+            
+                int start = i*2+10;
+                int end = i*2+1+10;
+
+                var leg_dir = points[end].pos - points[start].pos;
+
+                // Get knee direction
+                var leg_dir_flat = math.normalize(new float2(math.dot(leg_dir, forward), math.dot(leg_dir, up)));
+                var leg_forward = leg_dir_flat[0] * up + leg_dir_flat[1] * -forward;
+                
+                // Get base whole-leg rotation
+                var bind_rotation = Quaternion.LookRotation(points[end].bind_pos - points[start].bind_pos, Vector3.forward);
+                var rotation = Quaternion.LookRotation(leg_dir, leg_forward) * bind_rotation;
+        
+                // Get knee bend axis
+                var old_axis = bind_rotation * Vector3.right;
+                var axis = rotation * Vector3.right;
+
+                ApplyTwoBoneIK(start, end, leg_forward, leg_ik, top, bottom, complete.points, old_axis, axis);
+                
+                if(debug_info.draw_ik_final){
+                    DebugDraw.Line(points[start].pos, bottom.transform.position, Color.white, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                    DebugDraw.Line(points[end].pos, bottom.transform.position, Color.white, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                }
+            }
+
+            // Head look            
+            // head_look_y: 50 = max look down, -70 = max look up
+            // head_look_x: -90 to 90
+
+            // Get head target in head transform space
+            var target = math.normalize(display_body.head.transform.InverseTransformPoint(look_target));
+            // Using sin here is not correct (should be asin or something), but looks ok so keeping it for now
+            var head_look_y = math.sin(target.x)*Mathf.Rad2Deg;
+            // Flatten look direction to solve other rotation axis
+            var temp = target;
+            temp.x = 0.0f;
+            temp = math.normalize(temp);
+            var head_look_x = -math.sin(temp.y)*Mathf.Rad2Deg;
+
+            // Apply head transform
+            display_body.head.transform.rotation = display_body.head.transform.rotation * Quaternion.Euler(head_look_x, 0f, 0f) * Quaternion.Euler(0f, head_look_y, 0f);
+            if(head_look_y > 0.0f){
+                display_body.head.transform.position = display_body.head.transform.position + (Vector3)((display_body.head.transform.right) * head_look_y * -0.001f);
+            }
+            
+            if(debug_info.draw_head_look){
+                DebugDraw.Sphere(look_target, Color.red, Vector3.one * 0.1f, Quaternion.identity, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+                DebugDraw.Line(display_body.head.transform.position, look_target, Color.red, DebugDraw.Lifetime.OneFrame, DebugDraw.Type.Xray);
+            }
         }
 
         // Debug draw skeleton
@@ -1069,4 +1265,5 @@ public class GibbonControl : MonoBehaviour {
     private void FixedUpdate() {
         Step(Time.fixedDeltaTime);
     }
+}
 }
